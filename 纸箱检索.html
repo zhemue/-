@@ -1,0 +1,1011 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>纸箱尺寸检索</title>
+    <script src="https://cdn.staticfile.org/vue/3.3.4/vue.global.prod.js"></script>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.sheetjs.com/xlsx-latest/package/dist/xlsx.full.min.js"></script>
+    <style>
+        .erp-blue { background-color: #1890ff; }
+        .resizer { position: absolute; right: 0; top: 0; width: 4px; height: 100%; cursor: col-resize; }
+        .resizer:hover { background: #1890ff; }
+        th { position: relative; white-space: nowrap; background: #fafafa; border: 1px solid #e8e8e8; font-size: 14px; }
+        td { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; border: 1px solid #e8e8e8; padding: 8px 10px; font-size: 14px; }
+        .history-item:hover { background: #f0f7ff; cursor: pointer; }
+        .active-tab { border-bottom: 2px solid white; font-weight: bold; }
+        .stat-badge { 
+            color: rgb(0, 0, 0);
+            padding: 3px 10px;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .search-mode-select {
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            padding: 4px 10px;
+            font-size: 14px;
+            background: white;
+            outline: none;
+            cursor: pointer;
+        }
+        .diff-positive { color: #ff4d4f; font-weight: bold; font-size: 20px; }
+        .diff-negative { color: #52c41a; font-weight: bold; font-size: 20px; }
+        .diff-zero { color: #187cff; font-weight: bold; font-size: 20px; }
+        .diff-label {
+            font-size: 20px;
+            color: #000000;
+            margin-right: 4px;
+        }
+        .tolerance-input {
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            padding: 4px 12px;
+            width: 60px;
+            font-size: 16px;
+            background: white;
+            outline: none;
+        }
+        .tolerance-label {
+            font-size: 16px;
+            color: #666;
+            margin-right: 4px;
+        }
+        /* 分页样式 */
+        .pagination {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            font-size: 16px;
+        }
+        .page-btn {
+            padding: 5px 12px;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            background: white;
+            cursor: pointer;
+            transition: all 0.2s;
+            font-size: 14px;
+        }
+        .page-btn:hover:not(:disabled) {
+            background: #f0f0f0;
+        }
+        .page-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .page-input {
+            width: 55px;
+            text-align: center;
+            padding: 5px;
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            font-size: 14px;
+        }
+        .page-size-select {
+            border: 1px solid #d9d9d9;
+            border-radius: 4px;
+            padding: 5px;
+            font-size: 14px;
+            background: white;
+            outline: none;
+        }
+        .page-info {
+            color: #666;
+            font-size: 14px;
+        }
+        .current-page {
+            font-weight: bold;
+            color: #1890ff;
+        }
+        /* 加载提示 */
+        .loading-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background: rgba(255, 255, 255, 0.8);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+        }
+        .loading-spinner {
+            width: 35px;
+            height: 35px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #1890ff;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+        }
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+        /* 每页显示条数选择器 */
+        .page-size-container {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .page-size-label {
+            font-size: 13px;
+            color: #666;
+            white-space: nowrap;
+        }
+    </style>
+</head>
+<body class="bg-gray-100 h-screen overflow-hidden flex flex-col font-sans text-base">
+    <div id="app" class="flex flex-col h-full">
+        <header class="erp-blue px-4 py-3 flex items-center justify-between text-white shadow-md z-20">
+            <div class="flex items-center gap-6">
+                <span class="font-bold text-xl tracking-wider">📦 纸箱尺寸检索系统</span>
+                <nav class="flex gap-6 text-base">
+                    <button @click="switchToSearch" :class="{'active-tab': viewMode === 'search'}" class="py-1 px-2">尺寸检索</button>
+                    <button @click="switchToAll" :class="{'active-tab': viewMode === 'all'}" class="py-1 px-2">货品档案</button>
+                    <button @click="viewMode = 'stats'" :class="{'active-tab': viewMode === 'stats'}" class="py-1 px-2">搜索统计</button>
+                </nav>
+            </div>
+            <div class="flex items-center gap-3">
+                <!-- 这里不再显示导入相关按钮 -->
+            </div>
+        </header>
+
+        <div class="flex flex-1 overflow-hidden">
+            <aside class="w-52 bg-white border-r flex flex-col shadow-inner">
+                <div class="p-4 border-b bg-gray-50 text-sm font-bold text-gray-500 flex justify-between">
+                    <span>搜索历史</span>
+                    <button @click="clearHistory" class="text-blue-400 font-normal hover:underline text-sm">清空</button>
+                </div>
+                <div class="flex-1 overflow-y-auto">
+                    <div v-for="(h, idx) in history" :key="idx" @click="applyHistory(h)" class="p-4 border-b history-item group">
+                        <div class="flex justify-between items-center">
+                            <div class="text-blue-600 font-mono font-bold text-base">{{h.l}}×{{h.w}}×{{h.h}}</div>
+                            <span class="stat-badge">{{h.count || 1}}</span>
+                        </div>
+                        <div class="text-xs text-gray-400 mt-1 italic">{{h.time}}</div>
+                    </div>
+                </div>
+            </aside>
+
+            <main class="flex-1 flex flex-col overflow-hidden bg-white m-3 rounded shadow-sm border">
+                <div class="p-4 border-b bg-gray-50 flex items-center justify-between">
+                    <!-- 尺寸检索模式 -->
+                    <div v-if="viewMode === 'search'" class="flex items-center gap-3 flex-wrap">
+                        <span class="font-bold text-gray-600 text-base">检索模式:</span>
+                        <select v-model="searchMode" class="search-mode-select">
+                            <option value="size">按尺寸检索</option>
+                            <option value="name">按名称检索</option>
+                            <option value="both">尺寸+名称组合检索</option>
+                        </select>
+                        
+                        <!-- 尺寸匹配正负差异调节 -->
+                        <div v-if="searchMode === 'size' || searchMode === 'both'" class="flex items-center gap-2">
+                            <span class="tolerance-label">容差:</span>
+                            <input 
+                                type="number" 
+                                v-model.number="tolerance" 
+                                min="1" 
+                                max="20"
+                                class="tolerance-input"
+                                title="允许的尺寸差异范围（单位：cm）"
+                            >
+                            <span class="text-sm text-gray-500">cm</span>
+                        </div>
+                        
+                        <!-- 尺寸检索部分 -->
+                        <div v-if="searchMode === 'size' || searchMode === 'both'" class="flex items-center gap-3">
+                            <span class="font-bold text-gray-600 text-base">目标尺寸:</span>
+                            <input type="number" v-model.number="query.l" class="border p-2 w-18 rounded outline-none text-base" placeholder="长">
+                            <input type="number" v-model.number="query.w" class="border p-2 w-18 rounded outline-none text-base" placeholder="宽">
+                            <input type="number" v-model.number="query.h" class="border p-2 w-18 rounded outline-none text-base" placeholder="高">
+                        </div>
+                        
+                        <!-- 名称检索部分 -->
+                        <div v-if="searchMode === 'name' || searchMode === 'both'" class="flex items-center gap-3">
+                            <span class="font-bold text-gray-600 text-base">货品名称:</span>
+                            <input type="text" v-model="query.name" class="border p-2 w-52 rounded outline-none text-base" placeholder="输入货品名称关键词">
+                        </div>
+                        
+                        <button @click="doSearch" class="bg-blue-600 text-white px-6 py-2 rounded hover:bg-blue-700 transition text-base">匹配</button>
+                        
+                        <!-- 显示当前匹配模式 -->
+                        <div class="text-sm text-gray-500 ml-4">
+                            <span v-if="searchMode === 'size'">当前: 尺寸匹配(±{{tolerance}}cm)</span>
+                            <span v-if="searchMode === 'name'">当前: 名称模糊匹配</span>
+                            <span v-if="searchMode === 'both'">当前: 尺寸+名称组合匹配</span>
+                        </div>
+                    </div>
+                    
+                    <!-- 货品档案模式 -->
+                    <div v-else-if="viewMode === 'all'" class="flex items-center gap-4 w-full justify-between">
+                        <div class="flex items-center gap-4">
+                            <span class="font-bold text-gray-600 text-base">货品档案</span>
+                            <span class="text-sm text-gray-400">共 {{totalRecords}} 条记录</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <!-- 每页显示条数选择 -->
+                            <div class="page-size-container">
+                                <span class="page-size-label">每页:</span>
+                                <select v-model="archivePageSize" @change="resetArchiveToFirstPage" class="page-size-select">
+                                    <option value="50">50条</option>
+                                    <option value="100">100条</option>
+                                    <option value="200">200条</option>
+                                    <option value="500">500条</option>
+                                    <option value="1000">1000条</option>
+                                </select>
+                            </div>
+                            <!-- 在货品档案模式下显示导入相关按钮 -->
+                            <button @click="downloadTemplate" class="bg-blue-800/40 hover:bg-blue-800/60 px-4 py-2 rounded text-sm transition border border-white/20">
+                                下载导入模板
+                            </button>
+                            <button @click="triggerFileSelect" class="bg-green-600 hover:bg-green-700 px-4 py-2 rounded text-sm font-bold shadow-sm">
+                                导入 Excel 货品
+                            </button>
+                            <button v-if="boxDatabase.length > 0" 
+                                    @click="clearDatabase" 
+                                    class="text-red-500 text-sm hover:bg-red-50 px-3 py-2 rounded border border-red-200">
+                                清空所有货品
+                            </button>
+                        </div>
+                    </div>
+                    
+                    <!-- 搜索统计模式 -->
+                    <div v-else class="flex items-center gap-4 w-full justify-between">
+                        <div class="flex items-center gap-4">
+                            <span class="font-bold text-gray-600 text-base">搜索统计记录</span>
+                            <span class="text-sm text-gray-400">共 {{Object.keys(searchStats).length}} 种尺寸被搜索</span>
+                        </div>
+                        <div class="flex items-center gap-3">
+                            <button @click="clearStats" class="text-red-500 text-sm hover:bg-red-50 px-3 py-2 rounded border border-red-200">
+                                清空统计
+                            </button>
+                            <button @click="exportStats" class="bg-purple-600 hover:bg-purple-700 px-4 py-2 rounded text-sm text-white font-bold shadow-sm">
+                                导出统计
+                            </button>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- 文件上传控件 - 放在表格上方，但不显眼 -->
+                <input type="file" ref="fileInput" class="hidden" accept=".xlsx, .xls" @change="handleFileUpload">
+
+                <div class="flex-1 overflow-auto bg-gray-50 relative" ref="scrollBox">
+                    <!-- 加载提示 -->
+                    <div v-if="isLoading" class="loading-overlay">
+                        <div class="loading-spinner"></div>
+                    </div>
+
+                    <!-- 尺寸检索和货品档案共用表格 -->
+                    <table v-if="viewMode !== 'stats'" class="bg-white text-left border-collapse table-fixed min-w-full">
+                        <thead class="sticky top-0 z-10">
+                            <tr>
+                                <th v-for="(col, idx) in columns" :key="idx" :style="{ width: col.width + 'px' }" class="p-3">
+                                    {{ col.title }}
+                                    <div class="resizer" @mousedown="startResize($event, idx)"></div>
+                                </th>
+                                <!-- 只在货品档案模式下显示操作列 -->
+                                <th v-if="viewMode === 'all'" class="w-24 p-3 border text-base">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(item, index) in currentDisplayData" :key="item.id || index" class="hover:bg-blue-50/50">
+                                <td class="text-center text-gray-500 text-base">{{ getDisplayIndex(index) }}</td>
+                                <td class="font-mono text-blue-600 px-3 text-base">{{ item.merchantCode || item.sku || '-' }}</td>
+                                <td class="px-3 text-base">{{ item.name || '-' }}</td>
+                                <!-- 尺寸信息列 -->
+                                <td class="text-center font-mono font-bold text-base">
+                                    {{ item.l }}×{{ item.w }}×{{ item.h }}
+                                </td>
+                                <!-- 尺寸差异栏 -->
+                                <td v-if="viewMode === 'search' && (searchMode === 'size' || searchMode === 'both') && query.l && query.w && query.h" 
+                                    class="text-center px-3">
+                                    <div class="flex flex-col items-center justify-center space-y-1">
+                                        <div class="flex items-center">
+                                            <span class="diff-label">长:</span>
+                                            <span :class="getDiffClass(item.diffL)">
+                                                {{formatDiff(item.diffL)}}
+                                            </span>
+                                        </div>
+                                        <div class="flex items-center">
+                                            <span class="diff-label">宽:</span>
+                                            <span :class="getDiffClass(item.diffW)">
+                                                {{formatDiff(item.diffW)}}
+                                            </span>
+                                        </div>
+                                        <div class="flex items-center">
+                                            <span class="diff-label">高:</span>
+                                            <span :class="getDiffClass(item.diffH)">
+                                                {{formatDiff(item.diffH)}}
+                                            </span>
+                                        </div>
+                                    </div>
+                                </td>
+                                <td v-else-if="viewMode === 'search'" class="text-center font-mono px-3 text-base">
+                                    {{ item.l }}×{{ item.w }}×{{ item.h }}
+                                </td>
+                                <!-- 只在货品档案模式下显示操作列 -->
+                                <td v-if="viewMode === 'all'" class="text-center">
+                                    <button @click="deleteItem(item)" class="text-red-400 hover:text-red-600 text-sm">删除</button>
+                                </td>
+                            </tr>
+                            <tr v-if="currentDisplayData.length === 0">
+                                <td :colspan="emptyColspan" class="p-24 text-center text-gray-400 italic bg-white text-base">
+                                    <template v-if="viewMode === 'search'">
+                                        <span v-if="searchMode === 'size'">请输入尺寸进行检索...</span>
+                                        <span v-else-if="searchMode === 'name'">请输入货品名称关键词进行检索...</span>
+                                        <span v-else>请输入尺寸和/或货品名称进行检索...</span>
+                                    </template>
+                                    <template v-else>
+                                        暂无货品数据，请下载模板填写并导入
+                                    </template>
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <!-- 搜索统计表格 -->
+                    <table v-else class="bg-white text-left border-collapse table-fixed min-w-full">
+                        <thead class="sticky top-0 z-10">
+                            <tr>
+                                <th class="p-3 border text-base" style="width: 60px;">序号</th>
+                                <th class="p-3 border text-base" style="width: 140px;">尺寸</th>
+                                <th class="p-3 border text-base" style="width: 110px;">搜索次数</th>
+                                <th class="p-3 border text-base" style="width: 140px;">最近搜索时间</th>
+                                <th class="p-3 border text-base" style="width: 140px;">首次搜索时间</th>
+                                <th class="p-3 border text-base" style="width: 90px;">操作</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr v-for="(stat, index) in sortedStats" :key="stat.key" class="hover:bg-purple-50/50">
+                                <td class="text-center text-gray-500 text-base">{{ index + 1 }}</td>
+                                <td class="text-center font-mono text-blue-600 font-bold px-3 text-base">
+                                    {{ stat.l }}×{{ stat.w }}×{{ stat.h }}
+                                </td>
+                                <td class="text-center">
+                                    <span class="stat-badge">{{ stat.count }}</span>
+                                </td>
+                                <td class="text-center text-gray-600 text-sm px-3">{{ stat.lastTime }}</td>
+                                <td class="text-center text-gray-500 text-sm px-3">{{ stat.firstTime || stat.lastTime }}</td>
+                                <td class="text-center">
+                                    <button @click="applyStat(stat)" class="text-blue-400 hover:text-blue-600 text-sm px-3 py-2 rounded border border-blue-200">
+                                        快速应用
+                                    </button>
+                                </td>
+                            </tr>
+                            <tr v-if="sortedStats.length === 0">
+                                <td colspan="6" class="p-24 text-center text-gray-400 italic bg-white text-base">
+                                    暂无搜索统计记录
+                                </td>
+                            </tr>
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- 分页控件 - 在货品档案模式下显示 -->
+                <div v-if="viewMode === 'all' && boxDatabase.length > 0" class="p-4 border-t bg-gray-50 flex items-center justify-between">
+                    <div class="text-sm text-gray-500">
+                        显示第 {{archiveStartIndex + 1}} 到 {{archiveEndIndex}} 条记录，共 {{totalRecords}} 条
+                    </div>
+                    <div class="pagination">
+                        <button @click="goToFirstPage" :disabled="archiveCurrentPage === 1" class="page-btn">首页</button>
+                        <button @click="goToPrevPage" :disabled="archiveCurrentPage === 1" class="page-btn">上一页</button>
+                        
+                        <span class="page-info">
+                            第 
+                            <input 
+                                type="number" 
+                                v-model.number="archiveInputPage" 
+                                @keyup.enter="goToArchiveInputPage"
+                                :min="1" 
+                                :max="archiveTotalPages" 
+                                class="page-input current-page"
+                            >
+                            页 / 共 {{archiveTotalPages}} 页
+                        </span>
+                        
+                        <button @click="goToNextPage" :disabled="archiveCurrentPage === archiveTotalPages" class="page-btn">下一页</button>
+                        <button @click="goToLastPage" :disabled="archiveCurrentPage === archiveTotalPages" class="page-btn">尾页</button>
+                    </div>
+                </div>
+
+                <!-- 分页控件 - 在尺寸检索模式下显示 -->
+                <div v-if="viewMode === 'search' && searchResult.length > 0" class="p-4 border-t bg-gray-50 flex items-center justify-between">
+                    <div class="flex items-center gap-4">
+                        <div class="text-sm text-gray-500">
+                            显示第 {{searchStartIndex + 1}} 到 {{searchEndIndex}} 条记录，共 {{searchResult.length}} 条匹配结果
+                        </div>
+                        <!-- 每页显示条数选择 - 尺寸检索模式 -->
+                        <div class="page-size-container">
+                            <span class="page-size-label">每页:</span>
+                            <select v-model="searchPageSize" @change="resetSearchToFirstPage" class="page-size-select">
+                                <option value="20">20条</option>
+                                <option value="50">50条</option>
+                                <option value="100">100条</option>
+                                <option value="200">200条</option>
+                            </select>
+                        </div>
+                    </div>
+                    <div class="pagination">
+                        <button @click="goToSearchFirstPage" :disabled="searchCurrentPage === 1" class="page-btn">首页</button>
+                        <button @click="goToSearchPrevPage" :disabled="searchCurrentPage === 1" class="page-btn">上一页</button>
+                        
+                        <span class="page-info">
+                            第 
+                            <input 
+                                type="number" 
+                                v-model.number="searchInputPage" 
+                                @keyup.enter="goToSearchInputPage"
+                                :min="1" 
+                                :max="searchTotalPages" 
+                                class="page-input current-page"
+                            >
+                            页 / 共 {{searchTotalPages}} 页
+                        </span>
+                        
+                        <button @click="goToSearchNextPage" :disabled="searchCurrentPage === searchTotalPages" class="page-btn">下一页</button>
+                        <button @click="goToSearchLastPage" :disabled="searchCurrentPage === searchTotalPages" class="page-btn">尾页</button>
+                    </div>
+                </div>
+            </main>
+        </div>
+    </div>
+
+    <script>
+        const { createApp, ref, computed, onMounted, watch } = Vue;
+
+        createApp({
+            setup() {
+                const viewMode = ref('search');
+                const searchMode = ref('size');
+                const tolerance = ref(3);
+                const query = ref({ l: null, w: null, h: null, name: '' });
+                const boxDatabase = ref(JSON.parse(localStorage.getItem('box_db_v2') || '[]'));
+                
+                // 货品档案分页相关变量
+                const archiveCurrentPage = ref(1);
+                const archivePageSize = ref(100);
+                const archiveInputPage = ref(1);
+                
+                // 尺寸检索分页相关变量
+                const searchCurrentPage = ref(1);
+                const searchPageSize = ref(50);
+                const searchInputPage = ref(1);
+                const searchResult = ref([]); // 存储搜索结果
+                
+                const isLoading = ref(false);
+                
+                // 历史记录（按时间排序，显示最近搜索）
+                const history = ref(JSON.parse(localStorage.getItem('box_history') || '[]'));
+                
+                // 搜索统计（按尺寸统计搜索次数）
+                const searchStats = ref(JSON.parse(localStorage.getItem('box_search_stats') || '{}'));
+                
+                // 记录上一次搜索的尺寸（用于避免重复记录）
+                const lastSearchSize = ref({ l: null, w: null, h: null });
+                
+                const fileInput = ref(null);
+
+                // 视图切换时重置分页
+                const switchToSearch = () => {
+                    viewMode.value = 'search';
+                };
+                
+                const switchToAll = () => {
+                    viewMode.value = 'all';
+                    resetArchiveToFirstPage();
+                };
+
+                // 货品档案分页计算
+                const totalRecords = computed(() => boxDatabase.value.length);
+                const archiveTotalPages = computed(() => Math.ceil(totalRecords.value / archivePageSize.value));
+                const archiveStartIndex = computed(() => (archiveCurrentPage.value - 1) * archivePageSize.value);
+                const archiveEndIndex = computed(() => {
+                    const end = archiveCurrentPage.value * archivePageSize.value;
+                    return end > totalRecords.value ? totalRecords.value : end;
+                });
+                
+                // 货品档案分页数据
+                const archivePaginatedData = computed(() => {
+                    const start = archiveStartIndex.value;
+                    const end = Math.min(start + archivePageSize.value, totalRecords.value);
+                    return boxDatabase.value.slice(start, end);
+                });
+
+                // 尺寸检索分页计算
+                const searchTotalPages = computed(() => Math.ceil(searchResult.value.length / searchPageSize.value));
+                const searchStartIndex = computed(() => (searchCurrentPage.value - 1) * searchPageSize.value);
+                const searchEndIndex = computed(() => {
+                    const end = searchCurrentPage.value * searchPageSize.value;
+                    return end > searchResult.value.length ? searchResult.value.length : end;
+                });
+                
+                // 尺寸检索分页数据
+                const searchPaginatedData = computed(() => {
+                    const start = searchStartIndex.value;
+                    const end = Math.min(start + searchPageSize.value, searchResult.value.length);
+                    return searchResult.value.slice(start, end);
+                });
+
+                // 当前显示的数据
+                const currentDisplayData = computed(() => {
+                    if (viewMode.value === 'all') {
+                        return archivePaginatedData.value;
+                    } else if (viewMode.value === 'search') {
+                        return searchPaginatedData.value;
+                    }
+                    return [];
+                });
+
+                // 获取显示序号（考虑分页）
+                const getDisplayIndex = (index) => {
+                    if (viewMode.value === 'all') {
+                        return archiveStartIndex.value + index + 1;
+                    } else if (viewMode.value === 'search') {
+                        return searchStartIndex.value + index + 1;
+                    }
+                    return index + 1;
+                };
+
+                // 动态列定义 - 简化后的列
+                const columns = computed(() => {
+                    const baseColumns = [
+                        { title: '序号', width: 60 },
+                        { title: '商家编码', width: 140 },
+                        { title: '货品名称', width: 220 },
+                        { title: '尺寸信息', width: 140 }
+                    ];
+                    
+                    // 在尺寸检索模式下显示尺寸差异，在货品档案模式下不显示额外列
+                    if (viewMode.value === 'search') {
+                        return [...baseColumns, { title: '尺寸差异', width: 140 }];
+                    } else {
+                        return baseColumns;
+                    }
+                });
+
+                // 计算空数据提示的colspan
+                const emptyColspan = computed(() => {
+                    if (viewMode.value === 'search') {
+                        // 尺寸检索模式：4列基础列 + (显示尺寸差异？1:0)
+                        return 4 + ((searchMode.value === 'size' || searchMode.value === 'both') && query.value.l && query.value.w && query.value.h ? 1 : 0);
+                    } else if (viewMode.value === 'all') {
+                        // 货品档案模式：4列基础列 + 1列操作列
+                        return 5;
+                    }
+                    return 4;
+                });
+
+                // 搜索数据逻辑 - 更新以支持容忍度和多种搜索模式
+                const calculateSearchResult = () => {
+                    const { l, w, h, name } = query.value;
+                    
+                    // 如果没有输入任何条件，返回空数组
+                    if ((!l || !w || !h) && !name) return [];
+                    
+                    let result = boxDatabase.value;
+                    
+                    // 根据搜索模式进行筛选
+                    if (searchMode.value === 'size' || searchMode.value === 'both') {
+                        if (l && w && h) {
+                            let target = [l, w, h].sort((a, b) => b - a);
+                            result = result
+                                .map(box => {
+                                    let cur = [box.l, box.w, box.h].sort((a, b) => b - a);
+                                    const diffL = cur[0] - target[0];
+                                    const diffW = cur[1] - target[1];
+                                    const diffH = cur[2] - target[2];
+                                    const totalDiff = Math.abs(diffL) + Math.abs(diffW) + Math.abs(diffH);
+                                    
+                                    // 使用可调节的容忍度
+                                    if (Math.abs(diffL) <= tolerance.value && Math.abs(diffW) <= tolerance.value && Math.abs(diffH) <= tolerance.value) {
+                                        return { 
+                                            ...box, 
+                                            diffL, 
+                                            diffW, 
+                                            diffH,
+                                            totalDiff,
+                                            // 保存原始顺序的差异
+                                            origDiffL: box.l - l,
+                                            origDiffW: box.w - w,
+                                            origDiffH: box.h - h
+                                        };
+                                    }
+                                    return null;
+                                })
+                                .filter(b => b !== null)
+                                .sort((a, b) => a.totalDiff - b.totalDiff);
+                        } else if (searchMode.value === 'size') {
+                            // 纯尺寸模式但没有输入完整尺寸，返回空
+                            return [];
+                        }
+                    }
+                    
+                    // 名称筛选（适用于name模式和both模式）
+                    if (searchMode.value === 'name' || searchMode.value === 'both') {
+                        if (name && name.trim() !== '') {
+                            const keyword = name.trim().toLowerCase();
+                            result = result.filter(box => 
+                                (box.name && box.name.toLowerCase().includes(keyword))
+                            );
+                        } else if (searchMode.value === 'name') {
+                            // 纯名称模式但没有输入名称，返回空
+                            return [];
+                        }
+                    }
+                    
+                    return result;
+                };
+
+                // 计算排序后的统计列表（按搜索次数降序）
+                const sortedStats = computed(() => {
+                    return Object.values(searchStats.value)
+                        .sort((a, b) => b.count - a.count);
+                });
+
+                // 格式化差异显示
+                const formatDiff = (diff) => {
+                    if (diff === 0) return "0";
+                    return diff > 0 ? `+${diff}` : `${diff}`;
+                };
+                
+                // 获取差异显示的CSS类
+                const getDiffClass = (diff) => {
+                    if (diff > 0) return "diff-positive";
+                    if (diff < 0) return "diff-negative";
+                    return "diff-zero";
+                };
+
+                // 货品档案分页操作方法
+                const resetArchiveToFirstPage = () => {
+                    archiveCurrentPage.value = 1;
+                    archiveInputPage.value = 1;
+                };
+                
+                const goToFirstPage = () => {
+                    archiveCurrentPage.value = 1;
+                    archiveInputPage.value = 1;
+                };
+                
+                const goToPrevPage = () => {
+                    if (archiveCurrentPage.value > 1) {
+                        archiveCurrentPage.value--;
+                        archiveInputPage.value = archiveCurrentPage.value;
+                    }
+                };
+                
+                const goToNextPage = () => {
+                    if (archiveCurrentPage.value < archiveTotalPages.value) {
+                        archiveCurrentPage.value++;
+                        archiveInputPage.value = archiveCurrentPage.value;
+                    }
+                };
+                
+                const goToLastPage = () => {
+                    archiveCurrentPage.value = archiveTotalPages.value;
+                    archiveInputPage.value = archiveCurrentPage.value;
+                };
+                
+                const goToArchiveInputPage = () => {
+                    let page = parseInt(archiveInputPage.value);
+                    if (isNaN(page) || page < 1) {
+                        page = 1;
+                    } else if (page > archiveTotalPages.value) {
+                        page = archiveTotalPages.value;
+                    }
+                    archiveCurrentPage.value = page;
+                    archiveInputPage.value = page;
+                };
+
+                // 尺寸检索分页操作方法
+                const resetSearchToFirstPage = () => {
+                    searchCurrentPage.value = 1;
+                    searchInputPage.value = 1;
+                };
+                
+                const goToSearchFirstPage = () => {
+                    searchCurrentPage.value = 1;
+                    searchInputPage.value = 1;
+                };
+                
+                const goToSearchPrevPage = () => {
+                    if (searchCurrentPage.value > 1) {
+                        searchCurrentPage.value--;
+                        searchInputPage.value = searchCurrentPage.value;
+                    }
+                };
+                
+                const goToSearchNextPage = () => {
+                    if (searchCurrentPage.value < searchTotalPages.value) {
+                        searchCurrentPage.value++;
+                        searchInputPage.value = searchCurrentPage.value;
+                    }
+                };
+                
+                const goToSearchLastPage = () => {
+                    searchCurrentPage.value = searchTotalPages.value;
+                    searchInputPage.value = searchCurrentPage.value;
+                };
+                
+                const goToSearchInputPage = () => {
+                    let page = parseInt(searchInputPage.value);
+                    if (isNaN(page) || page < 1) {
+                        page = 1;
+                    } else if (page > searchTotalPages.value) {
+                        page = searchTotalPages.value;
+                    }
+                    searchCurrentPage.value = page;
+                    searchInputPage.value = page;
+                };
+
+                // 监听当前页码变化，同步输入框
+                watch(archiveCurrentPage, (newVal) => {
+                    archiveInputPage.value = newVal;
+                });
+                
+                watch(searchCurrentPage, (newVal) => {
+                    searchInputPage.value = newVal;
+                });
+
+                // 下载 Excel 模板
+                const downloadTemplate = () => {
+                    const data = [ 
+                        ["商家编码", "货品名称", "长", "宽", "高"], 
+                        ["MC001", "A4标准纸箱", 30, 20, 15] 
+                    ];
+                    const ws = XLSX.utils.aoa_to_sheet(data);
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, "货品导入模板");
+                    XLSX.writeFile(wb, "纸箱导入模板.xlsx");
+                };
+
+                // 导入功能 - 简化后的导入逻辑
+                const triggerFileSelect = () => fileInput.value.click();
+                const handleFileUpload = (e) => {
+                    const file = e.target.files[0];
+                    if (!file) return;
+                    
+                    // 显示加载提示
+                    isLoading.value = true;
+                    
+                    const reader = new FileReader();
+                    reader.onload = (ev) => {
+                        try {
+                            const workbook = XLSX.read(new Uint8Array(ev.target.result), { type: 'array' });
+                            const json = XLSX.utils.sheet_to_json(workbook.Sheets[workbook.SheetNames[0]]);
+                            
+                            const newItems = json.map(r => ({
+                                id: Date.now() + Math.random(),
+                                merchantCode: r['商家编码'] || r['编号'] || 'N/A', // 兼容旧模板
+                                name: r['货品名称'] || r['名称'] || '未命名',
+                                l: Number(r['长']) || 0, 
+                                w: Number(r['宽']) || 0, 
+                                h: Number(r['高']) || 0,
+                                // 保留旧的sku字段用于兼容
+                                sku: r['商家编码'] || r['编号'] || 'N/A'
+                            }));
+                            
+                            boxDatabase.value = [...boxDatabase.value, ...newItems];
+                            saveDb();
+                            alert(`成功导入 ${newItems.length} 个货品`);
+                            viewMode.value = 'all';
+                            resetArchiveToFirstPage();
+                        } catch (error) {
+                            alert('导入失败：' + error.message);
+                        } finally {
+                            isLoading.value = false;
+                        }
+                    };
+                    
+                    reader.onerror = () => {
+                        alert('文件读取失败');
+                        isLoading.value = false;
+                    };
+                    
+                    reader.readAsArrayBuffer(file);
+                };
+
+                // 删除货品
+                const deleteItem = (item) => {
+                    if(confirm(`确认删除货品：${item.name}？`)) {
+                        boxDatabase.value = boxDatabase.value.filter(b => b.id !== item.id);
+                        saveDb();
+                        // 如果删除后当前页没有数据了，返回上一页
+                        if (archivePaginatedData.value.length === 0 && archiveCurrentPage.value > 1) {
+                            archiveCurrentPage.value--;
+                        }
+                    }
+                };
+
+                const clearDatabase = () => {
+                    if(confirm('确认清空所有货品档案吗？该操作无法撤销！')) {
+                        boxDatabase.value = [];
+                        saveDb();
+                        resetArchiveToFirstPage();
+                    }
+                };
+
+                const saveDb = () => {
+                    try {
+                        localStorage.setItem('box_db_v2', JSON.stringify(boxDatabase.value));
+                    } catch (e) {
+                        if (e.name === 'QuotaExceededError') {
+                            alert('存储空间不足，无法保存所有数据。请删除部分数据或清理浏览器缓存。');
+                        } else {
+                            alert('保存数据失败：' + e.message);
+                        }
+                    }
+                };
+                
+                const saveStats = () => localStorage.setItem('box_search_stats', JSON.stringify(searchStats.value));
+
+                // 检查是否为相同尺寸搜索
+                const isSameSizeSearch = (l, w, h) => {
+                    return lastSearchSize.value.l === l && 
+                           lastSearchSize.value.w === w && 
+                           lastSearchSize.value.h === h;
+                };
+
+                // 检索与历史
+                const doSearch = () => {
+                    const { l, w, h, name } = query.value;
+                    
+                    // 计算搜索结果
+                    const result = calculateSearchResult();
+                    searchResult.value = result;
+                    
+                    // 重置搜索分页到第一页
+                    resetSearchToFirstPage();
+                    
+                    // 根据搜索模式决定是否记录统计
+                    if ((searchMode.value === 'size' || searchMode.value === 'both') && l && w && h) {
+                        const time = new Date().toLocaleTimeString();
+                        const dateTime = new Date().toLocaleString();
+                        
+                        // 检查是否为相同尺寸搜索
+                        const sameSize = isSameSizeSearch(l, w, h);
+                        
+                        // 如果不是相同尺寸搜索，则记录统计
+                        if (!sameSize) {
+                            // 更新上一次搜索尺寸
+                            lastSearchSize.value = { l, w, h };
+                            
+                            // 1. 添加到历史记录（按时间排序）
+                            // 检查历史记录中是否已经有完全相同的尺寸
+                            const existingHistoryIndex = history.value.findIndex(h => 
+                                h.l === l && h.w === w && h.h === h
+                            );
+                            
+                            if (existingHistoryIndex !== -1) {
+                                // 如果已存在，更新时间和次数
+                                history.value[existingHistoryIndex].time = time;
+                                history.value[existingHistoryIndex].count = (history.value[existingHistoryIndex].count || 1) + 1;
+                                // 移动到最前面
+                                const existingItem = history.value.splice(existingHistoryIndex, 1)[0];
+                                history.value.unshift(existingItem);
+                            } else {
+                                // 添加新记录
+                                history.value.unshift({ l, w, h, time, count: 1 });
+                                if (history.value.length > 15) history.value.pop();
+                            }
+                            localStorage.setItem('box_history', JSON.stringify(history.value));
+                            
+                            // 2. 更新搜索统计
+                            const key = `${l}-${w}-${h}`;
+                            if (searchStats.value[key]) {
+                                // 已存在，更新次数和时间
+                                searchStats.value[key].count += 1;
+                                searchStats.value[key].lastTime = dateTime;
+                            } else {
+                                // 新尺寸，添加记录
+                                searchStats.value[key] = {
+                                    key,
+                                    l, w, h,
+                                    count: 1,
+                                    firstTime: dateTime,
+                                    lastTime: dateTime
+                                };
+                            }
+                            saveStats();
+                        }
+                    } else {
+                        // 如果是纯名称搜索，重置上一次搜索尺寸
+                        lastSearchSize.value = { l: null, w: null, h: null };
+                    }
+                };
+                
+                // 从历史记录应用
+                const applyHistory = (h) => { 
+                    // 重置上一次搜索尺寸，这样点击历史记录时会记录新的搜索
+                    lastSearchSize.value = { l: null, w: null, h: null };
+                    
+                    query.value = { l: h.l, w: h.w, h: h.h, name: '' }; 
+                    viewMode.value = 'search';
+                    searchMode.value = 'size';
+                    
+                    // 自动执行搜索
+                    doSearch();
+                };
+                
+                // 从统计记录应用
+                const applyStat = (stat) => {
+                    // 重置上一次搜索尺寸，这样点击统计记录时会记录新的搜索
+                    lastSearchSize.value = { l: null, w: null, h: null };
+                    
+                    query.value = { l: stat.l, w: stat.w, h: stat.h, name: '' };
+                    viewMode.value = 'search';
+                    searchMode.value = 'size';
+                    
+                    // 自动执行搜索
+                    doSearch();
+                };
+                
+                const clearHistory = () => { 
+                    history.value = []; 
+                    localStorage.removeItem('box_history'); 
+                };
+                
+                // 清空搜索统计
+                const clearStats = () => {
+                    if(confirm('确认清空所有搜索统计记录吗？该操作无法撤销！')) {
+                        searchStats.value = {};
+                        saveStats();
+                    }
+                };
+                
+                // 导出搜索统计
+                const exportStats = () => {
+                    const statsArray = Object.values(searchStats.value).map(stat => ({
+                        尺寸: `${stat.l}×${stat.w}×${stat.h}`,
+                        搜索次数: stat.count,
+                        首次搜索时间: stat.firstTime,
+                        最近搜索时间: stat.lastTime
+                    }));
+                    
+                    if (statsArray.length === 0) {
+                        alert('暂无统计数据可导出');
+                        return;
+                    }
+                    
+                    const ws = XLSX.utils.json_to_sheet(statsArray);
+                    const wb = XLSX.utils.book_new();
+                    XLSX.utils.book_append_sheet(wb, ws, "搜索统计");
+                    XLSX.writeFile(wb, "纸箱搜索统计.xlsx");
+                };
+
+                // 列宽调节
+                let startX, startW, curCol;
+                const startResize = (e, i) => { 
+                    startX = e.pageX; 
+                    startW = columns.value[i].width; 
+                    curCol = i; 
+                    document.addEventListener('mousemove', onMove); 
+                    document.addEventListener('mouseup', onUp);
+                };
+                const onMove = (e) => { 
+                    if(curCol !== undefined) columns.value[curCol].width = Math.max(40, startW + (e.pageX - startX)); 
+                };
+                const onUp = () => { curCol = undefined; };
+
+                return { 
+                    viewMode, searchMode, tolerance, query, boxDatabase, history, searchStats, sortedStats,
+                    archiveCurrentPage, archivePageSize, archiveInputPage, archiveTotalPages, archiveStartIndex, archiveEndIndex,
+                    searchCurrentPage, searchPageSize, searchInputPage, searchTotalPages, searchStartIndex, searchEndIndex, searchResult,
+                    isLoading, totalRecords,
+                    columns, emptyColspan, currentDisplayData, fileInput, 
+                    switchToSearch, switchToAll,
+                    downloadTemplate, triggerFileSelect, handleFileUpload, 
+                    deleteItem, clearDatabase, 
+                    doSearch, applyHistory, applyStat, clearHistory, clearStats, exportStats,
+                    formatDiff, getDiffClass, getDisplayIndex,
+                    resetArchiveToFirstPage, goToFirstPage, goToPrevPage, goToNextPage, goToLastPage, goToArchiveInputPage,
+                    resetSearchToFirstPage, goToSearchFirstPage, goToSearchPrevPage, goToSearchNextPage, goToSearchLastPage, goToSearchInputPage,
+                    startResize 
+                };
+            }
+        }).mount('#app');
+    </script>
+</body>
+</html>
